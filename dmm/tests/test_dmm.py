@@ -15,8 +15,6 @@ class DmmTest(TestCase):
         # Validate model parameters. There should be one parameter for the mixture weights and four
         # parameters for tracking each Dirichlet's parameters.
         self.assertEqual(len(parameter_list), 5)
-        # Check that mixture weights sum to one.
-        self.assertAlmostEqual(self.dmm.log_mixture_weights.exp().sum().item(), 1)
 
     def test_forward(self):
         source_dirichlet = Dirichlet(torch.ones(10))

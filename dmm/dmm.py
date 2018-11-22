@@ -4,6 +4,7 @@ from typing import List
 from overrides import overrides
 import torch
 from torch.nn import Module, Parameter, ParameterList
+import torch.nn.functional as F
 
 
 def log_p(observed_data: torch.FloatTensor,
@@ -33,15 +34,12 @@ class DMM(Module):
         self._dim = dim
         self._n_components = n_components
 
-        log_mixture_weights = torch.full(size=(n_components,),
-                                         fill_value=1/n_components,
-                                         dtype=torch.float,
-                                         requires_grad=True).log()
-        self.log_mixture_weights = Parameter(log_mixture_weights)
+        mixture_logits = torch.zeros((n_components,), dtype=torch.float)
+        self.mixture_logits = Parameter(mixture_logits)
 
         self.log_alphas = ParameterList()
         for _ in range(n_components):
-            log_alpha = Parameter(torch.randn(dim, dtype=torch.float))
+            log_alpha = Parameter(torch.randn(dim, dtype=torch.float)/3)
             self.log_alphas.append(log_alpha)
 
     @overrides
@@ -63,14 +61,15 @@ class DMM(Module):
         """
         batch_size = observed_data.size()[0]
 
+        # Convert mixture logits to log probabilities
+        prior_log_probs = F.log_softmax(self.mixture_logits, dim=-1)
+
         # Compute membership probabilities.
         # NOTE: Need to use no_grad() here to prevent torch from trying to differentiate through
         # this step.
-
-        membership_log_probs = torch.zeros(size=(batch_size, self._n_components))
+        membership_log_probs = torch.empty(size=(batch_size, self._n_components), requires_grad=False)
         for i in range(self._n_components):
-            membership_log_probs[:, i] += self.log_mixture_weights[i]
-            membership_log_probs[:, i] += log_p(observed_data, self.log_alphas[i])
+            membership_log_probs[:, i] = prior_log_probs[i] + log_p(observed_data, self.log_alphas[i])
         denom = torch.logsumexp(membership_log_probs, dim=1)
         denom = denom.unsqueeze(1)
         membership_log_probs -= denom
@@ -80,7 +79,7 @@ class DMM(Module):
         # Compute expected negative log-likelihood w.r.t membership probabilities
         nll = torch.empty(size=(batch_size,), requires_grad=False)
         for i in range(self._n_components):
-            log_likelihood = self.log_mixture_weights[i] + log_p(observed_data, self.log_alphas[i])
+            log_likelihood = log_p(observed_data, self.log_alphas[i]) + prior_log_probs[i]
             nll[:,] -= membership_probs[:, i] * log_likelihood
 
         return nll, membership_probs
